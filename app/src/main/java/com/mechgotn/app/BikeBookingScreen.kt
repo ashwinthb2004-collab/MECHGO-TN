@@ -252,8 +252,8 @@ fun BikeBookingScreen(
                     Text("Time: $bookingTime")
 
                     Spacer(Modifier.height(8.dp))
-                    Text("Your booking is saved on this device.")
-                    Text("Open My Bookings to view it.")
+                    Text("Your booking is saved to your MECHGO TN account.")
+                    Text("Your booking will sync to your other signed-in devices.")
                 }
             }
         }
