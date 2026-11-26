@@ -1,4 +1,3 @@
-
 package com.mechgotn.app
 
 import android.os.Bundle
@@ -23,12 +22,7 @@ import kotlinx.coroutines.tasks.await
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        setContent {
-            MaterialTheme {
-                MechgoApp()
-            }
-        }
+        setContent { MaterialTheme { MechgoApp() } }
     }
 }
 
@@ -40,7 +34,8 @@ fun MechgoApp() {
     var signedIn by remember { mutableStateOf(auth.currentUser != null) }
     var currentPage by remember { mutableStateOf("Home") }
     var isAdmin by remember { mutableStateOf(false) }
-    var cloudBookings by remember { mutableStateOf<List<BikeBooking>>(emptyList()) }
+    var cloudBookings by remember { mutableStateOf<List<CloudBooking>>(emptyList()) }
+    var cloudBookingsLoaded by remember { mutableStateOf(false) }
     var cloudError by remember { mutableStateOf("") }
 
     val database = remember(context) { BookingDatabase.getDatabase(context) }
@@ -62,6 +57,7 @@ fun MechgoApp() {
 
     DisposableEffect(signedIn, uid) {
         if (signedIn && uid != null) {
+            cloudBookingsLoaded = false
             val registration = cloud.collection("bookings")
                 .whereEqualTo("ownerUid", uid)
                 .addSnapshotListener { snapshot, error ->
@@ -69,21 +65,14 @@ fun MechgoApp() {
                         cloudError = error.localizedMessage ?: "Cloud sync failed."
                     } else {
                         cloudError = ""
-                        cloudBookings = snapshot?.documents?.mapNotNull { doc ->
-                            doc.toCloudBooking()?.let { b ->
-                                BikeBooking(
-                                    serviceMode = b.serviceMode, brand = b.brand, model = b.model,
-                                    serviceType = b.serviceType, customerName = b.customerName,
-                                    phone = b.phone, address = b.address,
-                                    bookingDate = b.bookingDate, bookingTime = b.bookingTime
-                                )
-                            }
-                        } ?: emptyList()
+                        cloudBookings = snapshot?.documents?.mapNotNull { it.toCloudBooking() } ?: emptyList()
+                        cloudBookingsLoaded = true
                     }
                 }
             onDispose { registration.remove() }
         } else {
             cloudBookings = emptyList()
+            cloudBookingsLoaded = false
             onDispose { }
         }
     }
@@ -117,7 +106,22 @@ fun MechgoApp() {
             when (currentPage) {
                 "Home" -> HomeScreen(services = services, onSelect = { currentPage = it })
                 "My Bookings" -> MyBookingsScreen(
-                    bookings = if (cloudBookings.isNotEmpty()) cloudBookings else localBookings,
+                    bookings = if (cloudBookingsLoaded) cloudBookings else localBookings.map { booking ->
+                        CloudBooking(
+                            id = "local-${booking.id}",
+                            ownerUid = uid.orEmpty(),
+                            serviceMode = booking.serviceMode,
+                            brand = booking.brand,
+                            model = booking.model,
+                            serviceType = booking.serviceType,
+                            customerName = booking.customerName,
+                            phone = booking.phone,
+                            address = booking.address,
+                            bookingDate = booking.bookingDate,
+                            bookingTime = booking.bookingTime,
+                            status = "Pending"
+                        )
+                    },
                     onBack = { currentPage = "Home" }
                 )
                 "My Profile" -> Column(Modifier.fillMaxSize().padding(20.dp)) {
@@ -166,113 +170,45 @@ fun HomeScreen(
     services: List<Pair<String, String>>,
     onSelect: (String) -> Unit
 ) {
-
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .background(Color(0xFFF5F7FA))
-            .padding(16.dp)
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+            .background(Color(0xFFF5F7FA)).padding(16.dp)
     ) {
-
-        Text(
-            text = "MECHGO TN",
-            fontSize = 28.sp,
-            fontWeight = FontWeight.Bold,
-            color = Color(0xFF123B70)
-        )
-
-        Text(
-            text = "Your Vehicle. Our Responsibility.",
-            fontSize = 14.sp,
-            color = Color.Gray
-        )
-
+        Text("MECHGO TN", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Color(0xFF123B70))
+        Text("Your Vehicle. Our Responsibility.", fontSize = 14.sp, color = Color.Gray)
         Spacer(modifier = Modifier.height(22.dp))
-
         Card(
             modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(
-                containerColor = Color(0xFF123B70)
-            ),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF123B70)),
             shape = RoundedCornerShape(18.dp)
         ) {
             Column(modifier = Modifier.padding(20.dp)) {
-
-                Text(
-                    text = "Need Emergency Help?",
-                    color = Color.White,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold
-                )
-
+                Text("Need Emergency Help?", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(8.dp))
-
-                Text(
-                    text = "Get vehicle assistance when you need it.",
-                    color = Color.White
-                )
-
+                Text("Get vehicle assistance when you need it.", color = Color.White)
                 Spacer(modifier = Modifier.height(12.dp))
-
-                Button(
-                    onClick = { onSelect("Breakdown Help") }
-                ) {
-                    Text("Get Help Now")
-                }
+                Button(onClick = { onSelect("Breakdown Help") }) { Text("Get Help Now") }
             }
         }
-
         Spacer(modifier = Modifier.height(24.dp))
-
-        Text(
-            text = "Our Services",
-            fontSize = 21.sp,
-            fontWeight = FontWeight.Bold
-        )
-
+        Text("Our Services", fontSize = 21.sp, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(14.dp))
-
         services.forEach { service ->
-
             Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 10.dp),
+                modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
                 onClick = { onSelect(service.first) },
                 shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = Color.White
-                )
+                colors = CardDefaults.cardColors(containerColor = Color.White)
             ) {
-
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(18.dp),
+                    modifier = Modifier.fillMaxWidth().padding(18.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-
-                    Text(
-                        text = service.second,
-                        fontSize = 30.sp
-                    )
-
+                    Text(service.second, fontSize = 30.sp)
                     Spacer(modifier = Modifier.width(18.dp))
-
-                    Text(
-                        text = service.first,
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-
+                    Text(service.first, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                     Spacer(modifier = Modifier.weight(1f))
-
-                    Text(
-                        text = "›",
-                        fontSize = 28.sp,
-                        color = Color.Gray
-                    )
+                    Text("›", fontSize = 28.sp, color = Color.Gray)
                 }
             }
         }
@@ -281,93 +217,44 @@ fun HomeScreen(
 
 @Composable
 fun MyBookingsScreen(
-    bookings: List<BikeBooking>,
+    bookings: List<CloudBooking>,
     onBack: () -> Unit
 ) {
-
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFFF5F7FA))
-            .verticalScroll(rememberScrollState())
-            .padding(20.dp)
+        modifier = Modifier.fillMaxSize().background(Color(0xFFF5F7FA))
+            .verticalScroll(rememberScrollState()).padding(20.dp)
     ) {
-
-        TextButton(onClick = onBack) {
-            Text("← Back to Home")
-        }
-
-        Text(
-            text = "My Bookings",
-            fontSize = 27.sp,
-            fontWeight = FontWeight.Bold,
-            color = Color(0xFF123B70)
-        )
-
+        TextButton(onClick = onBack) { Text("← Back to Home") }
+        Text("My Bookings", fontSize = 27.sp, fontWeight = FontWeight.Bold, color = Color(0xFF123B70))
         Spacer(Modifier.height(18.dp))
-
         if (bookings.isEmpty()) {
-
-            Card(
-                modifier = Modifier.fillMaxWidth()
-            ) {
+            Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(24.dp),
+                    modifier = Modifier.fillMaxWidth().padding(24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-
                     Text("📋", fontSize = 42.sp)
-
                     Spacer(Modifier.height(10.dp))
-
-                    Text(
-                        "No bookings yet",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp
-                    )
-
-                    Text(
-                        "Your confirmed service bookings will appear here.",
-                        color = Color.Gray
-                    )
+                    Text("No bookings yet", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    Text("Your confirmed service bookings will appear here.", color = Color.Gray)
                 }
             }
-
         } else {
-
-            Text(
-                text = "Total Bookings: ${bookings.size}",
-                fontWeight = FontWeight.Bold,
-                fontSize = 17.sp
-            )
-
+            Text("Total Bookings: ${bookings.size}", fontWeight = FontWeight.Bold, fontSize = 17.sp)
             Spacer(Modifier.height(12.dp))
-
             bookings.forEachIndexed { index, booking ->
-
+                val statusColor = when (booking.status) {
+                    "Accepted" -> Color(0xFFE3F2FD)
+                    "Completed" -> Color(0xFFE5F5E9)
+                    else -> Color(0xFFFFF3E0)
+                }
                 Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 14.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = Color.White
-                    )
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 14.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.White)
                 ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp)
-                    ) {
-
-                        Text(
-                            text = "Booking #${index + 1}",
-                            fontSize = 19.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF123B70)
-                        )
-
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Booking #${index + 1}", fontSize = 19.sp, fontWeight = FontWeight.Bold, color = Color(0xFF123B70))
                         Spacer(Modifier.height(10.dp))
-
                         Text("Vehicle: ${booking.brand} ${booking.model}")
                         Text("Service: ${booking.serviceType}")
                         Text("Service Mode: ${booking.serviceMode}")
@@ -376,14 +263,15 @@ fun MyBookingsScreen(
                         Text("Address: ${booking.address}")
                         Text("Date: ${booking.bookingDate}")
                         Text("Time: ${booking.bookingTime}")
-
-                        Spacer(Modifier.height(10.dp))
-
-                        Text(
-                            "Booking Confirmed",
-                            color = Color(0xFF167A35),
-                            fontWeight = FontWeight.Bold
-                        )
+                        Spacer(Modifier.height(12.dp))
+                        Surface(color = statusColor, shape = RoundedCornerShape(10.dp)) {
+                            Text(
+                                "Booking Status: ${booking.status}",
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF123B70)
+                            )
+                        }
                     }
                 }
             }
@@ -398,37 +286,16 @@ fun SimplePage(
     description: String,
     onBack: () -> Unit
 ) {
-
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFFF5F7FA))
-            .padding(20.dp)
+        modifier = Modifier.fillMaxSize().background(Color(0xFFF5F7FA)).padding(20.dp)
     ) {
-
-        Button(onClick = onBack) {
-            Text("← Back")
-        }
-
+        Button(onClick = onBack) { Text("← Back") }
         Spacer(modifier = Modifier.height(30.dp))
-
         Text(text = emoji, fontSize = 45.sp)
-
         Spacer(modifier = Modifier.height(12.dp))
-
-        Text(
-            text = title,
-            fontSize = 26.sp,
-            fontWeight = FontWeight.Bold
-        )
-
+        Text(text = title, fontSize = 26.sp, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(12.dp))
-
-        Text(
-            text = description,
-            fontSize = 16.sp,
-            color = Color.Gray
-        )
+        Text(text = description, fontSize = 16.sp, color = Color.Gray)
     }
 }
 
@@ -437,32 +304,13 @@ fun ServiceScreen(
     serviceName: String,
     onBack: () -> Unit
 ) {
-
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFFF5F7FA))
-            .padding(20.dp)
+        modifier = Modifier.fillMaxSize().background(Color(0xFFF5F7FA)).padding(20.dp)
     ) {
-
-        Button(onClick = onBack) {
-            Text("← Back")
-        }
-
+        Button(onClick = onBack) { Text("← Back") }
         Spacer(modifier = Modifier.height(30.dp))
-
-        Text(
-            text = serviceName,
-            fontSize = 26.sp,
-            fontWeight = FontWeight.Bold
-        )
-
+        Text(text = serviceName, fontSize = 26.sp, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(12.dp))
-
-        Text(
-            text = "This service section is coming soon.",
-            fontSize = 16.sp,
-            color = Color.Gray
-        )
+        Text("This service section is coming soon.", fontSize = 16.sp, color = Color.Gray)
     }
 }
