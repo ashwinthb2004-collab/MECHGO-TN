@@ -18,6 +18,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.tasks.await
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -33,98 +34,128 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun MechgoApp() {
-
-    var currentPage by remember { mutableStateOf("Home") }
-
     val context = LocalContext.current
+    val auth = remember { com.google.firebase.auth.FirebaseAuth.getInstance() }
+    val cloud = remember { com.google.firebase.firestore.FirebaseFirestore.getInstance() }
+    var signedIn by remember { mutableStateOf(auth.currentUser != null) }
+    var currentPage by remember { mutableStateOf("Home") }
+    var isAdmin by remember { mutableStateOf(false) }
+    var cloudBookings by remember { mutableStateOf<List<BikeBooking>>(emptyList()) }
+    var cloudError by remember { mutableStateOf("") }
 
-    val database = remember(context) {
-        BookingDatabase.getDatabase(context)
+    val database = remember(context) { BookingDatabase.getDatabase(context) }
+    val bookingDao = remember(database) { database.bookingDao() }
+    val localBookings by bookingDao.getAllBookings().collectAsState(initial = emptyList())
+    val uid = auth.currentUser?.uid
+
+    LaunchedEffect(signedIn, uid) {
+        isAdmin = false
+        if (signedIn && uid != null) {
+            try {
+                val profile = cloud.collection("users").document(uid).get().await()
+                isAdmin = profile.getString("role") == "admin"
+            } catch (_: Exception) {
+                isAdmin = false
+            }
+        }
     }
 
-    val bookingDao = remember(database) {
-        database.bookingDao()
+    DisposableEffect(signedIn, uid) {
+        if (signedIn && uid != null) {
+            val registration = cloud.collection("bookings")
+                .whereEqualTo("ownerUid", uid)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        cloudError = error.localizedMessage ?: "Cloud sync failed."
+                    } else {
+                        cloudError = ""
+                        cloudBookings = snapshot?.documents?.mapNotNull { doc ->
+                            doc.toCloudBooking()?.let { b ->
+                                BikeBooking(
+                                    serviceMode = b.serviceMode, brand = b.brand, model = b.model,
+                                    serviceType = b.serviceType, customerName = b.customerName,
+                                    phone = b.phone, address = b.address,
+                                    bookingDate = b.bookingDate, bookingTime = b.bookingTime
+                                )
+                            }
+                        } ?: emptyList()
+                    }
+                }
+            onDispose { registration.remove() }
+        } else {
+            cloudBookings = emptyList()
+            onDispose { }
+        }
     }
 
-    val bookings by bookingDao
-        .getAllBookings()
-        .collectAsState(initial = emptyList())
+    if (!signedIn) {
+        AuthScreen(onAuthenticated = {
+            signedIn = true
+            currentPage = "Home"
+        })
+        return
+    }
 
     val services = listOf(
-        "Bike Service" to "🏍️",
-        "Car Service" to "🚗",
-        "EV Service" to "⚡",
-        "Breakdown Help" to "🆘",
-        "Mechanic" to "🔧",
-        "Towing" to "🚚",
-        "Detailing" to "✨",
-        "Spare Parts" to "⚙️"
+        "Bike Service" to "🏍️", "Car Service" to "🚗",
+        "EV Service" to "⚡", "Breakdown Help" to "🆘",
+        "Mechanic" to "🔧", "Towing" to "🚚",
+        "Detailing" to "✨", "Spare Parts" to "⚙️"
     )
 
     Scaffold(
         bottomBar = {
             NavigationBar {
-
-                NavigationBarItem(
-                    selected = currentPage == "Home",
-                    onClick = { currentPage = "Home" },
-                    icon = { Text("🏠") },
-                    label = { Text("Home") }
-                )
-
-                NavigationBarItem(
-                    selected = currentPage == "My Bookings",
-                    onClick = { currentPage = "My Bookings" },
-                    icon = { Text("📋") },
-                    label = { Text("Bookings") }
-                )
-
-                NavigationBarItem(
-                    selected = currentPage == "My Profile",
-                    onClick = { currentPage = "My Profile" },
-                    icon = { Text("👤") },
-                    label = { Text("Profile") }
-                )
+                NavigationBarItem(selected = currentPage == "Home", onClick = { currentPage = "Home" }, icon = { Text("🏠") }, label = { Text("Home") })
+                NavigationBarItem(selected = currentPage == "My Bookings", onClick = { currentPage = "My Bookings" }, icon = { Text("📋") }, label = { Text("Bookings") })
+                NavigationBarItem(selected = currentPage == "My Profile", onClick = { currentPage = "My Profile" }, icon = { Text("👤") }, label = { Text("Profile") })
+                if (isAdmin) NavigationBarItem(selected = currentPage == "Admin", onClick = { currentPage = "Admin" }, icon = { Text("🛠️") }, label = { Text("Admin") })
             }
         }
     ) { padding ->
-
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-        ) {
-
+        Box(Modifier.fillMaxSize().padding(padding)) {
             when (currentPage) {
-
-                "Home" -> HomeScreen(
-                    services = services,
-                    onSelect = { currentPage = it }
-                )
-
+                "Home" -> HomeScreen(services = services, onSelect = { currentPage = it })
                 "My Bookings" -> MyBookingsScreen(
-                    bookings = bookings,
+                    bookings = if (cloudBookings.isNotEmpty()) cloudBookings else localBookings,
                     onBack = { currentPage = "Home" }
                 )
-
-                "My Profile" -> SimplePage(
-                    title = "My Profile",
-                    emoji = "👤",
-                    description = "Your personal profile details will appear here.",
-                    onBack = { currentPage = "Home" }
-                )
-
+                "My Profile" -> Column(Modifier.fillMaxSize().padding(20.dp)) {
+                    Text("My Profile", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                    Text(auth.currentUser?.email ?: "")
+                    Spacer(Modifier.height(20.dp))
+                    Button(onClick = {
+                        auth.signOut()
+                        signedIn = false
+                        currentPage = "Home"
+                    }) { Text("Logout") }
+                }
+                "Admin" -> if (isAdmin) AdminScreen(onBack = { currentPage = "Home" })
+                           else SimplePage("Admin access denied", "🔒", "Your account is not an administrator.", { currentPage = "Home" })
                 "Bike Service" -> BikeBookingScreen(
                     onBack = { currentPage = "Home" },
                     onConfirm = { booking ->
                         bookingDao.insertBooking(booking)
+                        val currentUid = auth.currentUser?.uid ?: throw IllegalStateException("Please login again.")
+                        cloud.collection("bookings").add(
+                            mapOf(
+                                "ownerUid" to currentUid,
+                                "serviceMode" to booking.serviceMode,
+                                "brand" to booking.brand,
+                                "model" to booking.model,
+                                "serviceType" to booking.serviceType,
+                                "customerName" to booking.customerName,
+                                "phone" to booking.phone,
+                                "address" to booking.address,
+                                "bookingDate" to booking.bookingDate,
+                                "bookingTime" to booking.bookingTime,
+                                "status" to "Pending",
+                                "createdAt" to com.google.firebase.firestore.FieldValue.serverTimestamp()
+                            )
+                        ).await()
                     }
                 )
-
-                else -> ServiceScreen(
-                    serviceName = currentPage,
-                    onBack = { currentPage = "Home" }
-                )
+                else -> ServiceScreen(serviceName = currentPage, onBack = { currentPage = "Home" })
             }
         }
     }
